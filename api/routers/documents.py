@@ -30,7 +30,6 @@ async def upload_document(
             },
         )
 
-    # 1. Guardar el documento en la base de datos con status processing
     document = models.Document(
         filename=file.filename,
         status=models.DocumentStatus.processing,
@@ -39,16 +38,14 @@ async def upload_document(
     await db.commit()
     await db.refresh(document)
 
-    # 2. Guardar el archivo en disco
     file_path = f"{UPLOADS_PATH}/{document.id}_{file.filename}"
     with open(file_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
 
-    # 3. Procesar el PDF y guardar embeddings en ChromaDB
     try:
         await process_pdf(file_path, document.id)
         document.status = models.DocumentStatus.ready
-    except Exception as e:
+    except Exception:
         document.status = models.DocumentStatus.error
 
     await db.commit()
@@ -61,7 +58,6 @@ async def query_document_endpoint(
     body: schemas.DocumentQuery,
     db: AsyncSession = Depends(get_db),
 ):
-    # 1. Verificar que el documento existe y está listo
     result = await db.execute(
         select(models.Document).where(models.Document.id == id)
     )
@@ -87,6 +83,5 @@ async def query_document_endpoint(
             },
         )
 
-    # 2. Consultar el documento
     answer = await query_document(id, body.question)
     return schemas.DocumentQueryOut(question=body.question, answer=answer)
