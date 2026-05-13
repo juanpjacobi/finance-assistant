@@ -1,0 +1,9 @@
+venv/
+.env
+finance.db
+chroma_db/
+uploads/
+__pycache__/
+.pytest_cache/
+*.pyc
+.git/

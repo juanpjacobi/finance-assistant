@@ -1,0 +1,651 @@
+openapi: "3.1.0"
+
+info:
+  title: Finance Assistant API
+  version: "1.0.0"
+  description: Personal finance API with LLM integration
+  contact:
+    name: Juan Pablo Jacobi
+    email: juanpjacobi@email.com
+    url: https://github.com/juanpjacobi
+
+servers:
+  - url: http://localhost:8000
+    description: Local development
+
+tags:
+  - name: categories
+    description: Expense and income categories
+  - name: transactions
+    description: Financial transactions
+  - name: documents
+    description: PDF documents for semantic search
+  - name: budgets
+    description: Monthly spending limits per category
+
+components:
+  schemas:
+
+    Category:
+      type: object
+      required: [id, name]
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+          example: "Alimentación"
+        description:
+          type: string
+          nullable: true
+
+    Transaction:
+      type: object
+      required: [id, amount, type, date, category_id]
+      properties:
+        id:
+          type: integer
+        amount:
+          type: number
+          format: float
+          example: 1500.00
+        type:
+          type: string
+          enum: [income, expense]
+        date:
+          type: string
+          format: date
+          example: "2026-04-28"
+        description:
+          type: string
+          nullable: true
+        category_id:
+          type: integer
+        created_at:
+          type: string
+          format: date-time
+
+    Problem:
+      type: object
+      required: [type, title, status]
+      properties:
+        type:
+          type: string
+          format: uri
+          example: "https://api.financeassistant.dev/errors/not-found"
+        title:
+          type: string
+          example: "Resource not found"
+        status:
+          type: integer
+          example: 404
+        detail:
+          type: string
+          example: "Transaction with id 42 does not exist"
+
+    Budget:
+      type: object
+      required: [id, category_id, monthly_limit, month]
+      properties:
+        id:
+          type: integer
+        category_id:
+          type: integer
+        monthly_limit:
+          type: number
+          format: float
+          example: 5000.00
+        month:
+          type: string
+          pattern: '^\d{4}-(0[1-9]|1[0-2])$'
+          example: "2026-04"
+        created_at:
+          type: string
+          format: date-time
+
+    BudgetStatus:
+      type: object
+      required: [budget, spent, remaining, exceeded]
+      properties:
+        budget:
+          $ref: "#/components/schemas/Budget"
+        spent:
+          type: number
+          format: float
+        remaining:
+          type: number
+          format: float
+        exceeded:
+          type: boolean
+
+    Document:
+      type: object
+      required: [id, filename, status, uploaded_at]
+      properties:
+        id:
+          type: integer
+        filename:
+          type: string
+          example: "estado_cuenta_abril.pdf"
+        status:
+          type: string
+          enum: [processing, ready, error]
+        uploaded_at:
+          type: string
+          format: date-time
+
+  responses:
+    NotFound:
+      description: Resource not found
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    UnprocessableEntity:
+      description: Validation error
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+
+paths:
+
+  /categories:
+    get:
+      tags: [categories]
+      summary: List all categories
+      description: Returns all available categories for classifying transactions.
+      operationId: listCategories
+      responses:
+        "200":
+          description: List of categories
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Category"
+
+    post:
+      tags: [categories]
+      summary: Create a category
+      description: Creates a new category. Name must be unique.
+      operationId: createCategory
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name:
+                  type: string
+                  example: "Transporte"
+                description:
+                  type: string
+                  nullable: true
+      responses:
+        "201":
+          description: Category created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Category"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
+  /categories/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: integer
+
+    get:
+      tags: [categories]
+      summary: Get a category by id
+      description: Returns a single category by its id.
+      operationId: getCategory
+      responses:
+        "200":
+          description: Category found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Category"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+    put:
+      tags: [categories]
+      summary: Update a category
+      description: Updates name or description of an existing category.
+      operationId: updateCategory
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                description:
+                  type: string
+                  nullable: true
+      responses:
+        "200":
+          description: Category updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Category"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
+    delete:
+      tags: [categories]
+      summary: Delete a category
+      description: Deletes a category. Fails if transactions are assigned to it.
+      operationId: deleteCategory
+      responses:
+        "204":
+          description: Category deleted
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
+  /transactions/summary:
+    get:
+      tags: [transactions]
+      summary: Get financial summary
+      description: Returns total income, total expenses and balance for a given period.
+      operationId: getTransactionSummary
+      parameters:
+        - name: date_from
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date
+            example: "2026-01-01"
+        - name: date_to
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date
+            example: "2026-04-28"
+      responses:
+        "200":
+          description: Financial summary for the period
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [date_from, date_to, total_income, total_expenses, balance]
+                properties:
+                  date_from:
+                    type: string
+                    format: date
+                  date_to:
+                    type: string
+                    format: date
+                  total_income:
+                    type: number
+                    format: float
+                  total_expenses:
+                    type: number
+                    format: float
+                  balance:
+                    type: number
+                    format: float
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
+  /transactions:
+    get:
+      tags: [transactions]
+      summary: List transactions
+      description: Returns a list of transactions. Supports filtering by type, category and date range.
+      operationId: listTransactions
+      parameters:
+        - name: type
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [income, expense]
+        - name: category_id
+          in: query
+          required: false
+          schema:
+            type: integer
+        - name: date_from
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date
+            example: "2026-01-01"
+        - name: date_to
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date
+            example: "2026-04-28"
+      responses:
+        "200":
+          description: List of transactions
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Transaction"
+
+    post:
+      tags: [transactions]
+      summary: Create a transaction
+      description: Creates a new transaction. Date defaults to today if not provided.
+      operationId: createTransaction
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [amount, type, category_id]
+              properties:
+                amount:
+                  type: number
+                  format: float
+                  example: 1500.00
+                type:
+                  type: string
+                  enum: [income, expense]
+                date:
+                  type: string
+                  format: date
+                  description: Defaults to today if not provided.
+                  example: "2026-04-28"
+                description:
+                  type: string
+                  nullable: true
+                category_id:
+                  type: integer
+      responses:
+        "201":
+          description: Transaction created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Transaction"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
+  /transactions/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: integer
+
+    get:
+      tags: [transactions]
+      summary: Get a transaction by id
+      description: Returns a single transaction by its id.
+      operationId: getTransaction
+      responses:
+        "200":
+          description: Transaction found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Transaction"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+    put:
+      tags: [transactions]
+      summary: Update a transaction
+      description: Updates one or more fields of an existing transaction.
+      operationId: updateTransaction
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                amount:
+                  type: number
+                  format: float
+                type:
+                  type: string
+                  enum: [income, expense]
+                date:
+                  type: string
+                  format: date
+                description:
+                  type: string
+                  nullable: true
+                category_id:
+                  type: integer
+      responses:
+        "200":
+          description: Transaction updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Transaction"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
+    delete:
+      tags: [transactions]
+      summary: Delete a transaction
+      description: Permanently deletes a transaction by its id.
+      operationId: deleteTransaction
+      responses:
+        "204":
+          description: Transaction deleted
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /budgets:
+    get:
+      tags: [budgets]
+      summary: List all budgets
+      description: Returns all budgets. Optionally filter by month or category.
+      operationId: listBudgets
+      parameters:
+        - name: month
+          in: query
+          required: false
+          schema:
+            type: string
+            example: "2026-04"
+        - name: category_id
+          in: query
+          required: false
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: List of budgets
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Budget"
+
+    post:
+      tags: [budgets]
+      summary: Create a budget
+      description: Creates a monthly spending limit for a category. One budget per category per month.
+      operationId: createBudget
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [category_id, monthly_limit, month]
+              properties:
+                category_id:
+                  type: integer
+                monthly_limit:
+                  type: number
+                  format: float
+                  example: 5000.00
+                month:
+                  type: string
+                  example: "2026-04"
+      responses:
+        "201":
+          description: Budget created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Budget"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
+  /budgets/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: integer
+
+    get:
+      tags: [budgets]
+      summary: Get a budget by id
+      description: Returns a single budget by its id.
+      operationId: getBudget
+      responses:
+        "200":
+          description: Budget found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Budget"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+    delete:
+      tags: [budgets]
+      summary: Delete a budget
+      description: Permanently deletes a budget by its id.
+      operationId: deleteBudget
+      responses:
+        "204":
+          description: Budget deleted
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /budgets/{id}/status:
+    get:
+      tags: [budgets]
+      summary: Get budget status
+      description: Returns the budget alongside actual spending for that category and month.
+      operationId: getBudgetStatus
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Budget status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BudgetStatus"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /documents/upload:
+    post:
+      tags: [documents]
+      summary: Upload a document
+      description: Uploads a PDF document and processes it for semantic search.
+      operationId: uploadDocument
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+      responses:
+        "201":
+          description: Document uploaded and processed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Document"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
+  /documents/{id}/query:
+    post:
+      tags: [documents]
+      summary: Query a document
+      description: Asks a question about a previously uploaded document using semantic search.
+      operationId: queryDocument
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [question]
+              properties:
+                question:
+                  type: string
+                  example: "What was the total spent on transfers?"
+      responses:
+        "200":
+          description: Answer based on document content
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [question, answer]
+                properties:
+                  question:
+                    type: string
+                  answer:
+                    type: string
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
