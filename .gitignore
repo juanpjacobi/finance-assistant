@@ -6,3 +6,4 @@ uploads/
 __pycache__/
 *.pyc
 .pytest_cache/
+test.db
